@@ -2,18 +2,21 @@
   * Created by Raslu on 10.02.2016.
   */
 import java.sql.Timestamp
+import java.util.Calendar
+import java.util.concurrent.TimeUnit
 
 import org.apache.spark.sql.Row
 import org.apache.spark.{SparkContext, SparkConf}
-import org.joda.time.DateTime
-import org.joda.time.format.DateTimeFormat
+import org.joda.time.{Period, Instant, Interval, DateTime}
+import org.joda.time.format.{PeriodFormatterBuilder, DateTimeFormat}
 import org.slf4j.LoggerFactory
 import org.apache.spark.sql.functions._
+import org.apache.spark.sql.types._
 
 object SmartSpyStatisticsApp  extends App{
   val sparkConf = new SparkConf().setAppName("SmartSpy").setMaster("local[2]")
   val sc = new SparkContext(sparkConf)
-  val rawPrimaryStat = sc.textFile("C:\\Users\\Raslu\\IdeaProjects\\SmartSpyStatistics\\src\\cont_cut_30000.txt")
+  val rawPrimaryStat = sc.textFile("C:\\Users\\Raslu\\IdeaProjects\\SmartSpyStatistics\\src\\cont_cut.txt")
 
   val dateFormat = DateTimeFormat.forPattern("DD/MM/YYYY HH:mm:ss.SSS")
   val timeFormat = DateTimeFormat.forPattern("mm:ss.SSS")
@@ -73,68 +76,31 @@ object SmartSpyStatisticsApp  extends App{
   val primaryStatDF = primaryStat.toDF()
 
 
+  val columnStat  = Array("msgType","streamType","spyVersion","playerUrl")
+  val countCluster = 4
 
-    import java.io._
-    val writer = new PrintWriter(new File("C:\\Users\\Raslu\\IdeaProjects\\SmartSpyStatistics\\src/statistics.txt"))
-    writer.write(PrintDF.showString(primaryStatDF.describe("counter","received","linkFaults","restored"
-      ,"overflow","underflow","uptime","vidDecodeErrors","vidDataErrors"
-      ,"avTimeSkew","avPeriodSkew","bufUnderruns","bufOverruns","dvbLevel"
-      ,"curBitrate")
-      )
-    )
+  val hms = new PeriodFormatterBuilder().minimumPrintedDigits(2).printZeroAlways().appendHours().appendSeparator(":").appendMinutes().appendSuffix(":").appendSeconds().toFormatter
+  SmartSpyFunctions.writeCommonStatistics(primaryStatDF)
+  var timeStart = new DateTime()
 
-    writer.write(PrintDF.showString(primaryStatDF.filter("lost>=0").describe("lost")))
-    writer.write(PrintDF.showString(primaryStatDF.filter("mdiDf>=0").describe("mdiDf")))
-    writer.write(PrintDF.showString(primaryStatDF.filter("mdiMlr>=0").describe("mdiMlr")))
-    writer.write(PrintDF.showString(primaryStatDF.filter("regionId>=0").describe("regionId")))
-    writer.write(PrintDF.showString(primaryStatDF.filter("contentType>=0").describe("contentType")))
+  val dfN = SmartSpyFunctions.initN(sc, sqlContext, primaryStatDF, columnStat)
+  val periodN = new Period(timeStart, new DateTime()).normalizedStandard()
+  println("periodN:" + hms.print(periodN)+" count" +dfN.count())
 
-    writer.write(PrintDF.showString(primaryStatDF.filter("transportOuter>=0").describe("transportOuter")))
-      writer.write(PrintDF.showString(primaryStatDF.filter("transportInner>=0").describe("transportInner")))
-      writer.write(PrintDF.showString(primaryStatDF.filter("channelId>=0").describe("channelId")))
-      writer.write(PrintDF.showString(primaryStatDF.filter("playSession>=0").describe("playSession")))
-      writer.write(PrintDF.showString(primaryStatDF.filter("scrambled>=0").describe("scrambled")))
-      writer.write(PrintDF.showString(primaryStatDF.filter("powerState>=0").describe("powerState")))
-    //в инструкции написано 0 - неизвестно. Но в выборке присутствуют только значения -1(3) и 0 (30003)
-      writer.write(PrintDF.showString(primaryStatDF.filter("casType>0").describe("casType"))) //primaryStatDF.groupBy("casType").count().show()
-    //36 CAS_KEY_TIME  0 - неизвестно
-      writer.write(PrintDF.showString(primaryStatDF.filter("casKeyTime>0").describe("casKeyTime")))//primaryStatDF.groupBy("casKeyTime").count().show()
-    //37 VID_FRAMES 0 - видеостати стика недоступна
-      writer.write(PrintDF.showString(primaryStatDF.filter("vidFrames>0").describe("vidFrames")))
-      writer.write(PrintDF.showString(primaryStatDF.filter("audFrames>0").describe("audFrames")))
-    //т.к. поле audDataErrors показывает наличие ошибок при даступной аудиостатискики (audFrames>0) 0 здесь тоже информация для записей которые audFrames>0
-      writer.write(PrintDF.showString(primaryStatDF.filter("audFrames>0").describe("audDataErrors")))
-      writer.write(PrintDF.showString(primaryStatDF.filter("sdpObjectId>=0").describe("sdpObjectId")))
-      writer.write(PrintDF.showString(primaryStatDF.filter("dvbLevelGood>=0").describe("dvbLevelGood")))
-      writer.write(PrintDF.showString(primaryStatDF.filter("dvbLevel>=0").describe("dvbLevel")))
-      writer.write(PrintDF.showString(primaryStatDF.filter("dvbFrequency>=0").describe("dvbFrequency")))
+  timeStart = new DateTime()
+  val dfQ = SmartSpyFunctions.initQ(sc, sqlContext, primaryStatDF, countCluster)
+  val periodQ = new Period(timeStart, new DateTime()).normalizedStandard()
+  println("periodQ:" + hms.print(periodQ)+" count" +dfQ.count())
+
+  timeStart = new DateTime()
+  val dfJ = SmartSpyFunctions.initJTest(sc, sqlContext, countCluster, dfN)
+  val periodJ = new Period(timeStart, new DateTime()).normalizedStandard()
+  println("periodJ:" + hms.print(periodJ)+" count" +dfJ.count())
 
 
-
-    writer.write(PrintDF.showString(primaryStatDF.groupBy("msgType").count()))
-    writer.write(PrintDF.showString(primaryStatDF.groupBy("streamType").count()))
-    //primaryStatDF.groupBy("mac").count().show()
-    //primaryStatDF.groupBy("streamAddr").count().show()
-    writer.write(PrintDF.showString(primaryStatDF.groupBy("lostOverflow").count()))
-    writer.write(PrintDF.showString(primaryStatDF.groupBy("plc").count()))
-    //serviceAccountNumber
-    //val dfFilterServiceAccountNumber = primaryStatDF.filter("serviceAccountNumber not in ('-1','N/A')")
-    //dfFilterServiceAccountNumber.groupBy("serviceAccountNumber").count().join(dfFilterServiceAccountNumber.agg(count("serviceAccountNumber").as("countAll"))).show
-    //primaryStatDF.groupBy("stbIp").count().show()
-    writer.write(PrintDF.showString(primaryStatDF.groupBy("spyVersion").count()))
-    //playerUrl
-    val dfFilterPlayerUrl = primaryStatDF.filter("playerUrl not in ('X')")
-    dfFilterPlayerUrl.groupBy("playerUrl").count().join(dfFilterPlayerUrl.agg(count("playerUrl").as("countAll")))
-
-    writer.close()
-
-    def logger = LoggerFactory.getLogger(this.getClass)
-    logger.info("select data about 5 users")
-
-
-  val macListDF = primaryStatDF.groupBy(col("mac").as("mac1")).count().orderBy(desc("count")).limit(10).select("mac1")
-  val macDF = primaryStatDF.join(macListDF,macListDF("mac1") === primaryStatDF("mac")).select(primaryStatDF.col("*"))//.select(primaryStatDF.columns.mkString(", "))
-  macDF.show
-  //macDF.write.parquet("parquetTest")
+  timeStart = new DateTime()
+  val dfH = SmartSpyFunctions.H(sqlContext,dfQ,dfJ)
+  val periodH = new Period(timeStart, new DateTime()).normalizedStandard()
+  println("periodH:" + hms.print(periodH)+" count" +dfH.count())
 
 }
